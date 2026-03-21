@@ -1,115 +1,106 @@
-import logging
-import os
-import shutil
-from unittest.mock import MagicMock, patch
-
 import pytest
+from src.mask import get_mask_card_number
+import logging
+from unittest.mock import patch
 
-from src.mask import get_mask_card_number, log_dir, logger
 
-
-# Фикстуры
 @pytest.fixture
-def setup_logs(tmp_path):
-    """Фикстура для настройки тестовой среды с логированием"""
-    # Сохраняем оригинальные пути
-    original_log_dir = log_dir
-    original_handlers = logger.handlers.copy()
+def valid_card_numbers():
+    """Фикстура: корректные номера карт (только цифры)"""
+    return [
+        "1234567812345678",
+        "1111222233334444",
+        "9999",
+        "5",
+        "",
+    ]
 
-    # Настраиваем тестовую директорию
-    test_log_dir = tmp_path / "logs"
-    os.makedirs(test_log_dir, exist_ok=True)
 
-    # Перенастраиваем логгер
-    test_log_file = test_log_dir / "mask.log"
-    new_handler = logging.FileHandler(test_log_file)
-    new_handler.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
-    logger.handlers.clear()
-    logger.addHandler(new_handler)
+@pytest.fixture
+def invalid_card_strings():
+    """Фикстура: некорректные строки с буквами/символами — но с цифрами"""
+    return [
+        "1234a5678b9012",  # буквы + цифры
+        "1234-5678-9012-3456",  # дефисы
+        "1234 5678 9012 3456",  # пробелы
+        "!@#$1234%^&*5678",  # спецсимволы
+    ]
 
-    yield test_log_dir  # Передаем тестовую директорию в тест
 
-    # Восстанавливаем оригинальные настройки
-    logger.handlers.clear()
-    logger.handlers.extend(original_handlers)
+@pytest.fixture
+def invalid_types():
+    """Фикстура: неверные типы данных"""
+    return [
+        None,
+        12345678,
+        [],
+        {},
+        3.14,
+    ]
 
 
 @pytest.fixture
 def mock_logger():
-    """Фикстура для мока логгера"""
+    """Фикстура: мок для логгера"""
     with patch("src.mask.logger") as mock:
         yield mock
 
 
-# Параметризованные тесты
 @pytest.mark.parametrize(
-    "input_number,expected_output",
+    "card_number, expected",
     [
-        ("1234567812345678", " ****  **** **** 5678"),  # Корректный номер
-        ("1234", " ****  **** **** 1234"),  # Короткий номер
-        ("1", " ****  **** **** 1"),  # Очень короткий номер
-        ("", " **** "),  # Пустая строка
+        ("1234567812345678", "5678"),
+        ("1111222233334444", "4444"),
+        ("9999", "9999"),
+        ("5", "5"),
+        ("", ""),
     ],
 )
-def test_mask_card_number_valid(input_number, expected_output, mock_logger):
-    """Тест проверки маскирования корректных номеров карт"""
-    result = get_mask_card_number(input_number)
-
-    if input_number:  # Если номер не пустой
-        mock_logger.info.assert_called_once_with("Маскировка номера банковской карты")
-    else:
-        mock_logger.info.assert_not_called()
-
-    assert result == expected_output
+def test_get_mask_card_number_valid(card_number, expected):
+    """Тест: корректные номера карт — возвращают последние 4 цифры"""
+    result = get_mask_card_number(card_number)
+    assert result == expected
 
 
 @pytest.mark.parametrize(
-    "invalid_input",
+    "card_number, expected",
     [
-        "1234a567812345678",  # С буквой
-        "1234-5678-1234-5678",  # С дефисами
-        "1234 5678 1234 5678",  # С пробелами
-        "!@#$%^&*()",  # Спецсимволы
+        ("1234a5678b9012", "9012"),
+        ("1234-5678-9012-3456", "3456"),
+        ("1234 5678 9012 3456", "3456"),
+        ("!@#$1234%^&*5678", "5678"),
     ],
 )
-def test_mask_card_number_invalid(invalid_input, mock_logger):
-    """Тест проверки обработки некорректных номеров карт"""
+def test_get_mask_card_number_invalid_string_with_digits(card_number, expected, invalid_card_strings):
+    """Тест: строки с символами — извлекаются цифры, возвращаются последние 4"""
+    result = get_mask_card_number(card_number)
+    assert result == expected
+
+
+@pytest.mark.parametrize("invalid_input", [None, 12345678, [], {}, 3.14])
+def test_get_mask_card_number_invalid_type(invalid_input, invalid_types):
+    """Тест: неверные типы данных — возвращают пустую строку"""
     result = get_mask_card_number(invalid_input)
-
-    mock_logger.error.assert_called_once_with("Введены недопустимые символы в номере карты")
     assert result == ""
 
 
-def test_mask_card_number_none(mock_logger):
-    """Тест проверки обработки None"""
-    result = get_mask_card_number(None)
-
-    mock_logger.error.assert_called_once_with("Введены недопустимые символы в номере карты")
-    assert result == ""
-
-
-def test_log_directory_creation(setup_logs):
-    """Тест проверки создания директории логов"""
-    assert os.path.exists(log_dir)
-    assert os.path.isdir(log_dir)
+def test_get_mask_card_number_logs_success(mock_logger):
+    """Тест: успешная обработка логируется как INFO с правильным форматом"""
+    card_number = "1234567812345678"
+    get_mask_card_number(card_number)
+    mock_logger.info.assert_called_once_with(f"Извлечены последние цифры: '{card_number}' → '5678'")
 
 
-def test_logging_output(setup_logs, tmp_path):
-    """Тест проверки записи в лог-файл"""
-    test_number = "1234567812345678"
-    get_mask_card_number(test_number)
-
-    log_file = tmp_path / "logs" / "mask.log"
-    assert os.path.exists(log_file)
-
-    with open(log_file, "r") as f:
-        log_content = f.read()
-        assert "Маскировка номера банковской карты" in log_content
+def test_get_mask_card_number_logs_invalid_type(mock_logger):
+    """Тест: неверный тип логируется как ERROR"""
+    get_mask_card_number(None)
+    mock_logger.error.assert_called_once_with(
+        "Неверный тип номера карты: <class 'NoneType'> — ожидается str, получено: None"
+    )
 
 
-def test_logger_configuration():
-    """Тест проверки конфигурации логгера"""
-    assert logger.name == "mask"
-    assert logger.level == logging.DEBUG
-    assert len(logger.handlers) > 0
-    assert isinstance(logger.handlers[0], logging.FileHandler)
+def test_get_mask_card_number_empty_string_no_log(mock_logger):
+    """Тест: пустая строка не вызывает логирование (т.к. нет цифр)"""
+    get_mask_card_number("")
+    mock_logger.info.assert_not_called()
+    mock_logger.error.assert_not_called()

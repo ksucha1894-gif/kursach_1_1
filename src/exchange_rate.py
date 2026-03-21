@@ -1,18 +1,16 @@
 import json
 import os
 import time
-
 import requests
 from dotenv import load_dotenv
-
+from typing import List, Dict, Any, Optional
 from config import COURSE_PATH, ROOT_DIR
 
 
-def get_currency_rates():
-    # Загрузка настроек
-    settings_file_path = os.path.join(ROOT_DIR, "data", "user_settings.json")
-    with open(settings_file_path) as f:
-        user_settings = json.load(f)
+def get_currency_rates() -> Optional[List[Dict[str, float]]]:
+    # settings_file_path = os.path.join(ROOT_DIR, "data", "user_settings.json")
+    # with open(settings_file_path) as f:
+    #     user_settings = json.load(f)
 
     with open(COURSE_PATH) as file:
         data = json.load(file)
@@ -32,7 +30,7 @@ def get_currency_rates():
         params = {"symbol": symbol, "apikey": api_key}
 
         response = requests.get(url, params=params)
-        print(f"Ответ для {symbol}:", response.text)
+        # print(f"Ответ для {symbol}:", response.text)
 
         if response.status_code == 200:
             try:
@@ -40,7 +38,7 @@ def get_currency_rates():
                 # Извлекаем текущий курс (close)
                 exchange_rate = data.get("close")
                 if exchange_rate:
-                    print(f"Курс {cur} к RUB: {exchange_rate}")
+                    # print(f"Курс {cur} к RUB: {exchange_rate}")
                     results.append({"currency": cur, "rate": exchange_rate})
                 else:
                     print(f"Не удалось извлечь курс для {cur}")
@@ -54,6 +52,6 @@ def get_currency_rates():
     return results
 
 
-if __name__ == "__main__":
-    rates = get_currency_rates()
-    print("Результаты:", rates)
+# if __name__ == "__main__":
+#     rates = get_currency_rates()
+#     print("Результаты:", rates)

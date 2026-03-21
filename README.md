@@ -33,7 +33,7 @@ pip install pytest
 5. Сведения о работе приложения:
 5.1. Модуль main.py является точкой входа:
 
-def main():
+def main(datetime_str: str) -> str:
     """Основная функция программы"""
     logger.info("Финансовая аналитика запущена")
     print("Финансовая аналитика запущена")
@@ -41,10 +41,11 @@ def main():
     try:
         # 1. Получение финансового отчета
         print("\n1. Формирование финансового отчета...")
-        datetime_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        # datetime_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         financial_report = get_financial_report(datetime_str)
         report_data = json.loads(financial_report)
-        print(f"Отчет сформирован: {report_data['greeting']}")
+        print("Отчет сформирован")
+        pprint(report_data)
 
         # 2. Простой поиск транзакций
         print("\n2. Выполнение простого поиска...")
@@ -73,104 +74,133 @@ def main():
         print(f"Произошла ошибка: {str(e)}")
 
 5.2. В модуле views прописана главная функция:
+import json
+from datetime import datetime
+
+from src.utils import get_cards_summary, transactions_operations, get_currency_rates, get_stock_prices
+
+
 def get_financial_report(datetime_str: str) -> str:
-    dt = datetime.strptime(datetime_str, "%Y-%m-%d %H:%M:%S")
+    """
+    Главная функция, принимающая дату в формате YYYY-MM-DD HH:MM:SS
+    и возвращающая JSON-ответ по ТЗ.
+    """
+    if datetime_str:
+        dt = datetime.strptime(datetime_str, "%Y-%m-%d %H:%M:%S")
+    else:
+        dt = datetime.now()
+
+    # Определяем приветствие
     hour = dt.hour
-    if 5 <= hour < 12:
+    if 5 <= hour < 11:
         greeting = "Доброе утро"
-    elif 12 <= hour < 18:
+    elif 11 <= hour < 16:
         greeting = "Добрый день"
-    elif 18 <= hour < 23:
+    elif 16 <= hour < 20:
         greeting = "Добрый вечер"
     else:
         greeting = "Доброй ночи"
 
-    print(f"Greeting: {greeting}")  # Отладочный вывод для проверки
+    # 1. Получаем данные по картам
+    cards_data = get_cards_summary(datetime_str)
+    cards = []
+    for card in cards_data.get("cards", []):
+        try:
+            last_digits = str(card.get("last_digits", ""))[-4:] if card.get("last_digits") else ""
+            total_spent = float(card.get("total_spent", 0))
+            cashback = float(total_spent // 100)  # 1 рубль на каждые 100 рублей
+            if last_digits:  # Только валидные карты
+                cards.append(
+                    {"last_digits": last_digits, "total_spent": round(total_spent, 2), "cashback": round(cashback, 2)}
+                )
+        except (ValueError, TypeError):
+            continue
 
-    # Пример фиктивного номера карты
-    card_number = "1234567812345678"
-    card_data = get_mask_card_number(card_number)
+    # 2. Получаем топ-транзакции (все) и фильтруем по дате
+    transactions_data = transactions_operations()
+    top_transactions = []
+    start_of_month = dt.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
-    # Получаем общую сумму расходов
-    column_name = "Сумма платежа"
-    calculate_expenses = calculate_total_expenses(column_name)
+    for tx in transactions_data.get("top_transactions", []):
+        try:
+            tx_date = datetime.strptime(tx["date"], "%d.%m.%Y")  # Формат: DD.MM.YYYY
+            if start_of_month <= tx_date <= dt:  # Только в нужном диапазоне
+                top_transactions.append(
+                    {
+                        "date": tx["date"],
+                        "amount": float(tx["amount"]),
+                        "category": tx.get("category", ""),
+                        "description": tx.get("description", ""),
+                    }
+                )
+        except (ValueError, TypeError, KeyError):
+            continue  # Пропускаем битые записи
 
-    # Преобразуем DataFrame в список словарей
-    if isinstance(calculate_expenses, pd.DataFrame):
-        calculate_expenses = calculate_expenses.to_dict(orient='records')
+    # Сортируем по абсолютному значению суммы
+    top_transactions.sort(key=lambda x: abs(x["amount"]), reverse=True)
+    top_transactions = top_transactions[:5]  # Топ-5
 
-    # Получаем кешбэк
-    calculate_cashback = calculate_cashback_100()
+    # 3. Курсы валют
+    currency_rates_raw = get_currency_rates()
+    currency_rates = []
+    for cur in currency_rates_raw:
+        try:
+            currency = cur.get("currency", "").upper()
+            rate = float(cur.get("rate", 0))
+            if currency in ("USD", "EUR"):
+                currency_rates.append({"currency": currency, "rate": round(rate, 2)})
+        except (ValueError, TypeError):
+            continue
 
-    # Преобразуем DataFrame в список словарей
-    if isinstance(calculate_cashback, pd.DataFrame):
-        calculate_cashback = calculate_cashback.to_dict(orient='records')
+    # 4. Акции S&P500 — фиксированный набор (если virtual=True)
+    stock_prices_raw = get_stock_prices(virtual=True)
+    stock_prices = []
+    for stock in stock_prices_raw:
+        try:
+            stock_prices.append(
+                {"stock": str(stock.get("stock", "")), "price": round(float(stock.get("price", 0)), 2)}
+            )
+        except (ValueError, TypeError):
+            continue
 
-    # Получаем топ-5 транзакций
-    top_transactions = transactions_operations()
+    # Если акций меньше 5 — заполняем дефолтными
+    if len(stock_prices) < 5:
+        default_stocks = [
+            {"stock": "AAPL", "price": 150.12},
+            {"stock": "AMZN", "price": 3173.18},
+            {"stock": "GOOGL", "price": 2742.39},
+            {"stock": "MSFT", "price": 296.71},
+            {"stock": "TSLA", "price": 1007.08},
+        ]
+        stock_prices = default_stocks[:5]
 
-    # Преобразуем DataFrame в список словарей
-    if isinstance(top_transactions, pd.DataFrame):
-        top_transactions = top_transactions.to_dict(orient='records')
-
-    # Получаем курс валют
-    currency_rates = get_currency_rates()
-
-    # Получаем стоимость акций
-    stock_prices = get_stock_prices()
-
-    # Преобразуем DataFrame в список словарей
-    if isinstance(stock_prices, pd.DataFrame):
-        stock_prices = stock_prices.to_dict(orient='records')
-
-    # Формируем JSON-ответ
+    # Формируем итоговый ответ
     result = {
         "greeting": greeting,
-        "cards": card_data,
-        "expenses": calculate_expenses,
-        "cashback": calculate_cashback,
+        "cards": cards,
         "top_transactions": top_transactions,
         "currency_rates": currency_rates,
-        "stock_prices": stock_prices
+        "stock_prices": stock_prices,
     }
 
     return json.dumps(result, ensure_ascii=False, indent=4)
 
 5.3. Модуль utils является модулем со вспомогательными функциями для главной функции модуля views:
-import json
-import datetime
-import requests
-import pandas as pd
-from dotenv import load_dotenv
-import os
-import time
-from typing import Dict, List
-import openpyxl
-import logging
-import re
-from config import ROOT_DIR, FILE_PATH, COURSE_PATH
+from src.cards import get_cards_summary
 from src.stock_price import get_stock_prices
 from src.exchange_rate import get_currency_rates
-from src.mask import get_mask_card_number
-from src.cashback import calculate_cashback_100
-from expenses import calculate_total_expenses
 from src.transactions import transactions_operations
 from src.read_excel import read_operation_excel
 
-
-__all__ = [
-    "get_stock_prices",
-    "get_currency_rates",
-    "get_mask_card_number",
-    "calculate_cashback_100",
-    "calculate_total_expenses",
-    "transactions_operations",
-    "read_operation_excel"
-]
+# Константы
+CONFIG_PATH = "config.json"
+ROOT_DIR = "."
 
 5.4. Чтение файла excel, который используется для анализа, проводится в модуле read_excel:
-def read_operation_excel() -> List[Dict]:
-    """Функция принимает путь к файлу формата excel и возвращает список словарей."""
+def read_operation_excel() -> List[Dict[str, Any]]:
+    """
+    Функция принимает путь к файлу формата excel и возвращает список словарей.
+    """
     try:
         excel_data = pd.read_excel(FILE_PATH)
         return excel_data.to_dict(orient="records")
@@ -182,97 +212,140 @@ def read_operation_excel() -> List[Dict]:
         return []
 
 5.5. С помощью модуля mask создает маскировку банковской карты, а также логирование:
-# Определяем абсолютный путь к файлу
 log_dir = os.path.join(ROOT_DIR, "logs")
 log_file = os.path.join(log_dir, "mask.log")
-
-# Создаем папку для логов, если она не существует
 if not os.path.exists(log_dir):
     os.makedirs(log_dir)
 
-# Настройка логирования
-logger = logging.getLogger('mask')
+logger = logging.getLogger("mask")
 file_handler = logging.FileHandler(log_file)
-formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 file_handler.setFormatter(formatter)
 logger.addHandler(file_handler)
 logger.setLevel(logging.DEBUG)
 
 
-# Создаем функцию маски для карт
-def get_mask_card_number(number: str) -> str:
+def get_mask_card_number(number: Union[str, int, list, dict, float, None]) -> str:
     """
-    Функция принимает число - номер карты.
-    Маска преобразует число в формат XXXX XX** **** XXXX.
-    Если в номере есть недопустимые символы, логирует ошибку.
+    Принимает номер карты как строку (может содержать цифры, звёздочки, пробелы, дефисы).
+    Возвращает **только последние 4 цифры** в виде строки, например: "5814".
+
+    Если цифр меньше 4 — возвращает все доступные цифры (например, "719").
+    Если цифр нет — возвращает пустую строку.
+
+    Если входной аргумент не строка (включая None, int, list, dict, float) —
+    возвращает пустую строку и логирует ошибку.
+
+    Примеры:
+        "1234567812345678" → "5678"
+        "**** 5814" → "5814"
+        "123" → "123"
+        None → ""
+        12345678 → ""
+        [] → ""
     """
-    if number is None:  # Проверяем на None
-        logger.error('Введены недопустимые символы в номере карты')
+    # Обработка всех неверных типов: включая None, int, list, dict, float
+    if not isinstance(number, str):
+        logger.error(f"Неверный тип номера карты: {type(number)} — ожидается str, получено: {number}")
+        return ""  # ← ВСЕГДА возвращаем пустую строку для неверных типов
+
+    # Теперь number — точно str
+    if number == "":
+        logger.warning(f"В номере карты не найдено ни одной цифры: '{number}'")
         return ""
 
-    if re.fullmatch(r"\d+", number):  # Проверяем, что введены только цифры
-        masked_number = f" ****  **** **** {number[-4:]}"
-        print("Логирование начинается")
-        logger.info('Маскировка номера банковской карты')
-        return masked_number
-    if not number:
-        return ' **** '
-    else:
-        logger.error('Введены недопустимые символы в номере карты')
+    # Извлекаем только цифры из строки
+    digits = re.sub(r"\D", "", number)
+
+    if not digits:
+        logger.warning(f"В номере карты не найдено ни одной цифры: '{number}'")
         return ""
 
-5.6. Проводим расчет кэшбэка в модуле cashback и записываем результат в новый файл:
-# Функция для расчета кэшбэка
-def calculate_cashback_100():
-    # Чтение данных из Excel
-    df = pd.read_excel(FILE_PATH)
+    # Возвращаем последние 1–4 цифры
+    last_digits = digits[-4:]
+    logger.info(f"Извлечены последние цифры: '{number}' → '{last_digits}'")
+    return last_digits
 
-    # Проверка наличия обязательной колонки
-    if "Сумма платежа" not in df.columns:
-        raise KeyError("В файле отсутствует колонка 'Сумма платежа'")
+5.6. Возвращаем сумму трат и кэшбэк по каждой карте за период с начала месяца до указанной даты в модуле cards:
+def get_cards_summary(date_str: str) -> Dict[str, List[Dict[str, Any]]]:
+    """
+    Возвращает сумму трат и кэшбэк по каждой карте за период с начала месяца до указанной даты.
+    Формат даты: "YYYY-MM-DD HH:MM:SS"
+    Возвращает:
+    {
+        "cards": [
+            {
+                "last_digits": "5814",
+                "total_spent": 1262.00,
+                "cashback": 12.62
+            }
+        ]
+    }
+    """
+    try:
+        end_date = datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S")
+    except (ValueError, TypeError):
+        return {"cards": []}
 
-    # Инициализируем или обнуляем колонку "Кэшбэк"
-    df["Кэшбэк"] = 0.0
+    start_of_month = end_date.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    records = read_operation_excel()
+    if not records:
+        return {"cards": []}
 
-    # Пересчитываем кэшбек только для расходов
-    cash = df["Сумма платежа"] < 0
-    df.loc[cash, "Кэшбэк"] = df.loc[cash, "Сумма платежа"].abs() // 100
+    df = pd.DataFrame(records)
+    required_cols = {"Дата операции", "Сумма платежа", "Номер карты"}
+    if not required_cols.issubset(df.columns):
+        return {"cards": []}
 
-    # Вывод результата
-    print(df)
+    # Парсинг даты: ожидаем DD.MM.YYYY HH:MM:SS
+    df["Дата операции"] = pd.to_datetime(df["Дата операции"], format="%d.%m.%Y %H:%M:%S", errors="coerce")
+    df = df.dropna(subset=["Дата операции"])
 
-    # Запись изменений обратно в Excel
-    current_dir = os.path.dirname(__file__)
-    output_path = os.path.join(current_dir, '..', 'data', 'updated_operations.xlsx')
-    df.to_excel(output_path, index=False)
+    # Приведение суммы к числу
+    df["Сумма платежа"] = pd.to_numeric(df["Сумма платежа"], errors="coerce")
+    df = df.dropna(subset=["Сумма платежа"])
 
-5.7. Проводим расчет общих расходов в модуле expenses:
-def calculate_total_expenses(column_name: str) -> float:
-    """Вычисляет общую сумму расходов на основе указанной колонки."""
+    # Фильтруем только положительные суммы как расходы
+    df = df[df["Сумма платежа"] > 0]
 
-    total_expenses = 0.0
+    # Фильтруем по дате
+    df_filtered = df[(df["Дата операции"] >= start_of_month) & (df["Дата операции"] <= end_date)]
 
-    for record in read_operation_excel():
-        # Получаем сумму из указанной колонки и добавляем к общей сумме
-        amount = float(record.get(column_name, 0))
-        total_expenses += amount
+    if df_filtered.empty:
+        return {"cards": []}
 
-    # Возвращаем абсолютное значение общей суммы расходов
-    return abs(total_expenses)
+    cards_summary = []
+    for card_number, group in df_filtered.groupby("Номер карты"):
+        if not isinstance(card_number, str) or not card_number.strip():
+            continue
 
-5.8. Чтобы узнать курс валют воспользуемся модулем exchange_rate и помощью API:
-def get_currency_rates():
-    # Загрузка настроек
-    settings_file_path = os.path.join(ROOT_DIR, 'data', 'user_settings.json')
-    with open(settings_file_path) as f:
-        user_settings = json.load(f)
+        last_digits = get_mask_card_number(card_number.strip())
+        if not last_digits:
+            continue
+
+        total_spent = group["Сумма платежа"].sum()
+        total_spent = round(float(total_spent), 2)
+        cashback = round(total_spent * 0.01, 2)
+
+        cards_summary.append({"last_digits": last_digits, "total_spent": total_spent, "cashback": cashback})
+
+    # Сортировка по last_digits для стабильности тестов
+    cards_summary.sort(key=lambda x: x["last_digits"])
+
+    return {"cards": cards_summary}
+
+5.7. Чтобы узнать курс валют воспользуемся модулем exchange_rate и помощью API:
+def get_currency_rates() -> Optional[List[Dict[str, float]]]:
+    # settings_file_path = os.path.join(ROOT_DIR, "data", "user_settings.json")
+    # with open(settings_file_path) as f:
+    #     user_settings = json.load(f)
 
     with open(COURSE_PATH) as file:
         data = json.load(file)
         currency = data.get("user_currencies", [])
 
     load_dotenv()
-    api_key = os.getenv('API_KEY_twelvedata')
+    api_key = os.getenv("API_KEY_twelvedata")
     if not api_key:
         print("API_KEY не найден или не определён")
         return None
@@ -282,13 +355,10 @@ def get_currency_rates():
 
     for cur in currency:
         symbol = f"{cur}/RUB"
-        params = {
-            "symbol": symbol,
-            "apikey": api_key
-        }
+        params = {"symbol": symbol, "apikey": api_key}
 
         response = requests.get(url, params=params)
-        print(f"Ответ для {symbol}:", response.text)
+        # print(f"Ответ для {symbol}:", response.text)
 
         if response.status_code == 200:
             try:
@@ -296,7 +366,7 @@ def get_currency_rates():
                 # Извлекаем текущий курс (close)
                 exchange_rate = data.get("close")
                 if exchange_rate:
-                    print(f"Курс {cur} к RUB: {exchange_rate}")
+                    # print(f"Курс {cur} к RUB: {exchange_rate}")
                     results.append({"currency": cur, "rate": exchange_rate})
                 else:
                     print(f"Не удалось извлечь курс для {cur}")
@@ -309,64 +379,125 @@ def get_currency_rates():
 
     return results
 
-5.9. Чтобы узнать стоимость акций воспользуемся модулем stock_price и API:
+5.8. Чтобы узнать стоимость акций воспользуемся модулем stock_price и API:
 # Работа со стоимостью акций из S&P500
-def get_stock_prices(virtual=True):
+def get_stock_prices(virtual: bool = True) -> List[Dict[str, str]]:
+    """
+    Возвращает текущие цены для нескольких акций: AAPL и AMZN.
+    - Если virtual=True: возвращает фиктивные данные для тестирования.
+    - Если virtual=False: обращается к API Twelve Data для получения реальных цен.
+    Возвращает список: [
+        {"stock": "AAPL", "price": "150.12"},
+        {"stock": "AMZN", "price": "3173.18"}
+    ]
+    """
     if virtual:
-        return [
-            {"symbol": "SPY", "price": "400.00"}
-        ]
-    else:
-        # Загружаем переменные окружения
-        load_dotenv()
-        apikey = os.getenv("API_KEY_twelvedata")
+        return [{"stock": "AAPL", "price": "150.12"}, {"stock": "AMZN", "price": "3173.18"}]
 
-        # Проверяем, что API ключ загружен
-        if not apikey:
-            print("API_KEY not found. Please check your .env file.")
-            return []
+    # Загружаем переменные окружения
+    load_dotenv()
+    apikey = os.getenv("API_KEY_twelvedata")
 
-        # URL для получения ежедневных данных о ценах акций
-        url = f'https://api.twelvedata.com/etfs/list?apikey=demo'
+    # Проверка API ключа
+    if not apikey or apikey == "demo":
+        print("API_KEY not found or still using 'demo'. Please set a valid API key in .env file.")
+        return [{"stock": "AAPL", "price": "0.00"}, {"stock": "AMZN", "price": "0.00"}]
 
-        # Выполнение GET-запроса к API
-        response = requests.get(url)
+    # Список акций
+    symbols = ["AAPL", "AMZN"]
+    result = []
 
-        # Проверка статуса кода и обработка ответа
-        if response.status_code == 200:
-            try:
-                data = response.json()
-                print(json.dumps(data, indent=4))
-                return data
-            except json.JSONDecodeError as e:
-                print("Ошибка декодирования JSON:", e)
-        else:
-            print("Ошибка при запросе к API, статус код:", response.status_code)
-            print("Текст ответа:", response.text)
-        return []
+    for symbol in symbols:
+        url = f"https://api.twelvedata.com/price?symbol={symbol}&apikey={apikey}"
+        try:
+            response = requests.get(url, timeout=10)
+            response.raise_for_status()
+            data = response.json()
 
-5.10. Узнаем топ-5 транзакций с помощью модуля transactions:
+            if "price" in data:
+                result.append({"stock": symbol, "price": str(data["price"])})
+            else:
+                print(f"Непредвиденная структура ответа для {symbol}: {data}")
+                result.append({"stock": symbol, "price": "0.00"})
+
+        except requests.exceptions.RequestException as e:
+            print(f"Ошибка сети при запросе к Twelve Data для {symbol}: {e}")
+            result.append({"stock": symbol, "price": "0.00"})
+        except json.JSONDecodeError as e:
+            print(f"Ошибка декодирования JSON для {symbol}: {e}")
+            result.append({"stock": symbol, "price": "0.00"})
+        except Exception as e:
+            print(f"Неизвестная ошибка для {symbol}: {e}")
+            result.append({"stock": symbol, "price": "0.00"})
+
+    return result
+
+5.9. Узнаем топ-5 транзакций с помощью модуля transactions:
 # Выбираем топ-5 транзакций по сумме платежа.
 def transactions_operations():
-    """Вычисляет и выводит топ-5 транзакций по сумме платежа."""
+    """
+    Вычисляет и возвращает топ-5 транзакций по сумме платежа в формате:
+    {
+        "top_transactions": [
+            {
+                "date": "21.12.2021",
+                "amount": 1198.23,
+                "category": "Переводы",
+                "description": "..."
+            },
+            ...
+        ]
+    }
+    """
+    logger.info("Запуск функции transactions_operations()")
 
-    # Вызываем функцию для получения данных из Excel
-    transactions_df = read_operation_excel()
+    transactions_data = list(read_operation_excel())
 
-    # Преобразуем данные в DataFrame для дальнейшей обработки
-    transactions_df = pd.DataFrame(transactions_df)
+    if not transactions_data:
+        logger.warning("Данные из Excel отсутствуют")
+        return {"top_transactions": []}
 
-    # Отсортируем DataFrame по сумме платежа в порядке убывания
-    transactions_df['Сумма платежа'] = transactions_df['Сумма платежа'].astype(float)  # Убедимся, что сумма как число
-    sorted_transactions_df = transactions_df.sort_values(by='Сумма платежа', ascending=False)
+    try:
+        df = pd.DataFrame(transactions_data)
+        required_cols = {"Дата операции", "Сумма платежа", "Категория", "Описание"}
+        missing = required_cols - set(df.columns)
+        if missing:
+            logger.error(f"Отсутствуют обязательные столбцы: {missing}")
+            return {"top_transactions": []}
 
-    # Выберем топ-5 транзакций
-    top_5_transactions = sorted_transactions_df.head(5)
+        # Преобразование суммы платежа в числовой формат
+        df["Сумма платежа"] = pd.to_numeric(df["Сумма платежа"], errors="coerce")
+        # Преобразование даты
+        df["Дата операции"] = pd.to_datetime(df["Дата операции"], format="%d.%m.%Y %H:%M:%S", errors="coerce")
+        df["Дата операции"] = df["Дата операции"].dt.strftime("%d.%m.%Y")
 
-    # Выведем топ-5 транзакций
-    return top_5_transactions
+        # Фильтрация: убираем NaN и отрицательные/нулевые суммы
+        df = df.dropna(subset=["Сумма платежа", "Дата операции"])
+        df = df[df["Сумма платежа"] > 0]
 
-5.11. Выведем простой поиск в модуле services:
+        # Сортировка по сумме (по убыванию) и выбор топ-5
+        df_sorted = df.sort_values(by="Сумма платежа", ascending=False)
+        top_5 = df_sorted.head(5)
+
+        # Формируем результат
+        top_transactions = [
+            {
+                "date": str(row["Дата операции"]),
+                "amount": float(row["Сумма платежа"]),
+                "category": str(row["Категория"]) if pd.notna(row["Категория"]) else "",
+                "description": str(row["Описание"]) if pd.notna(row["Описание"]) else "",
+            }
+            for _, row in top_5.iterrows()
+        ]
+
+        logger.info(f"Успешно обработано {len(top_transactions)} транзакций")
+        return {"top_transactions": top_transactions}
+
+    except Exception as e:
+        logger.exception(f"Неожиданная ошибка в transactions_operations(): {e}")
+        return {"top_transactions": []}
+
+5.10. Выведем простой поиск в модуле services:
 def simple_search(query: str) -> str:
     """
     Функция сервиса «Простой поиск».
@@ -383,29 +514,23 @@ def simple_search(query: str) -> str:
 
         # Фильтруем транзакции по запросу
         filtered_transactions = [
-            tx for tx in transactions
+            tx
+            for tx in transactions
             if query.lower() in str(tx.get("Описание", "")).lower()
-               or query.lower() in str(tx.get("Категория", "")).lower()
+            or query.lower() in str(tx.get("Категория", "")).lower()
         ]
 
         # Логируем результат
         logger.info(f"Найдено {len(filtered_transactions)} транзакций по запросу '{query}'")
 
         # Возвращаем JSON-ответ
-        return json.dumps(
-            {"transactions": filtered_transactions},
-            ensure_ascii=False,
-            indent=2
-        )
+        return json.dumps({"transactions": filtered_transactions}, ensure_ascii=False, indent=2)
 
     except Exception as e:
         logger.error(f"Ошибка при выполнении поиска: {str(e)}")
-        return json.dumps(
-            {"error": "Внутренняя ошибка сервера"},
-            ensure_ascii=False
-        )
+        return json.dumps({"error": "Внутренняя ошибка сервера"}, ensure_ascii=False)
 
-5.12. Создадим отчеты в модуле reports:
+5.11. Создадим отчеты в модуле reports:
 # Путь к директории для отчетов
 REPORTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "reports")
 if not os.path.exists(REPORTS_DIR):
@@ -423,14 +548,14 @@ def report_to_file(filename: Optional[str] = None):
 
             # Определяем имя файла
             if filename:
-                report_name = filename if filename.endswith('.txt') else f"{filename}.txt"
+                report_name = filename if filename.endswith(".txt") else f"{filename}.txt"
             else:
                 report_name = f"{func.__name__}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
 
             report_path = os.path.join(REPORTS_DIR, report_name)
 
             try:
-                with open(report_path, 'w', encoding='utf-8') as f:
+                with open(report_path, "w", encoding="utf-8") as f:
                     if isinstance(result, pd.DataFrame):
                         f.write(result.to_string(index=False))
                     else:
@@ -441,15 +566,15 @@ def report_to_file(filename: Optional[str] = None):
                 raise
 
             return result
+
         return wrapper
+
     return decorator
 
 
 # Функция отчета: траты по категории за последние 3 месяца
 @report_to_file()
-def spending_by_category(transactions: pd.DataFrame,
-                        category: str,
-                        date: Optional[str] = None) -> pd.DataFrame:
+def spending_by_category(transactions: pd.DataFrame, category: str, date: Optional[str] = None) -> pd.DataFrame:
     """
     Функция возвращает траты по заданной категории за последние три месяца (от переданной даты).
     """
@@ -461,18 +586,14 @@ def spending_by_category(transactions: pd.DataFrame,
 
     # Приводим 'Дата операции' к datetime
     transactions_copy = transactions.copy()
-    transactions_copy['Дата операции'] = pd.to_datetime(
-        transactions_copy['Дата операции'],
-        format='%d.%m.%Y %H:%M:%S',
-        errors='coerce'
+    transactions_copy["Дата операции"] = pd.to_datetime(
+        transactions_copy["Дата операции"], format="%d.%m.%Y %H:%M:%S", errors="coerce"
     )
 
     # Пробуем альтернативный формат даты
-    if transactions_copy['Дата операции'].isna().any():
-        transactions_copy['Дата операции'] = pd.to_datetime(
-            transactions_copy['Дата операции'],
-            format='%d.%m.%Y',
-            errors='coerce'
+    if transactions_copy["Дата операции"].isna().any():
+        transactions_copy["Дата операции"] = pd.to_datetime(
+            transactions_copy["Дата операции"], format="%d.%m.%Y", errors="coerce"
         )
 
     # Определяем целевую дату
@@ -497,10 +618,10 @@ def spending_by_category(transactions: pd.DataFrame,
 
     # Фильтруем транзакции
     filtered = transactions_copy[
-        (transactions_copy['Категория'] == category) &
-        (transactions_copy['Сумма платежа'] < 0) &
-        (transactions_copy['Дата операции'] >= start_date) &
-        (transactions_copy['Дата операции'] <= target_date)
+        (transactions_copy["Категория"] == category)
+        & (transactions_copy["Сумма платежа"] < 0)
+        & (transactions_copy["Дата операции"] >= start_date)
+        & (transactions_copy["Дата операции"] <= target_date)
     ].copy()
 
     logger.info(f"Найдено {len(filtered)} транзакций для категории '{category}'")
@@ -510,71 +631,102 @@ def spending_by_category(transactions: pd.DataFrame,
         return filtered
 
     # Сортировка и возвращение результата
-    filtered = filtered.sort_values(by='Дата операции', ascending=False)
+    filtered = filtered.sort_values(by="Дата операции", ascending=False)
     return filtered.head(5)
 
-5.13. Прописаны тесты для указанных функций в модулях test_cashback, teast_exchange_rate, test_expenses, test_mask, 
-test_read_excel, test_reports, test_services, test_stock_price:
-@pytest.fixture
-def mock_excel_data():
-    """Фикстура для генерации тестовых данных"""
-    return pd.DataFrame({
-        "Сумма платежа": [100.50, -250.75, -150.25, 50.00],
-        "Дата": ["2023-01-01", "2023-01-02", "2023-01-03", "2023-01-04"]
-    })
+5.12. Прописаны тесты для указанных функций в модулях test_cards, test_exchange_rate, test_mask, 
+test_read_excel, test_reports, test_services, test_stock_price, test_transactions:
+@pytest.mark.parametrize(
+    "input_data, cutoff_date, expected",
+    [
+        # Тест 1: Одна транзакция, одна карта
+        (
+            [{"Дата операции": "31.12.2021 14:20:00", "Сумма платежа": 2500.0, "Номер карты": "1234567890123456"}],
+            "2021-12-31 23:59:59",
+            {"cards": [{"last_digits": "3456", "total_spent": 2500.0, "cashback": 25.0}]},
+        ),
+        # Тест 2: Две транзакции на одной карте
+        (
+            [
+                {"Дата операции": "15.12.2021 10:00:00", "Сумма платежа": 1200.0, "Номер карты": "1234567890123456"},
+                {"Дата операции": "25.12.2021 16:30:00", "Сумма платежа": 800.0, "Номер карты": "1234567890123456"},
+            ],
+            "2021-12-31 23:59:59",
+            {"cards": [{"last_digits": "3456", "total_spent": 2000.0, "cashback": 20.0}]},
+        ),
+        # Тест 3: Две карты
+        (
+            [
+                {"Дата операции": "05.12.2021 09:15:00", "Сумма платежа": 1500.0, "Номер карты": "1234567890123456"},
+                {"Дата операции": "10.12.2021 11:20:00", "Сумма платежа": 700.0, "Номер карты": "9876543210987654"},
+            ],
+            "2021-12-31 23:59:59",
+            {
+                "cards": [
+                    {"last_digits": "3456", "total_spent": 1500.0, "cashback": 15.0},
+                    {"last_digits": "7654", "total_spent": 700.0, "cashback": 7.0},
+                ]
+            },
+        ),
+        # Тест 4: Транзакции до начала месяца — игнорируются
+        (
+            [
+                {"Дата операции": "28.11.2021 18:45:00", "Сумма платежа": 1000.0, "Номер карты": "1234567890123456"},
+                {"Дата операции": "02.12.2021 12:00:00", "Сумма платежа": 500.0, "Номер карты": "1234567890123456"},
+            ],
+            "2021-12-15 23:59:59",
+            {"cards": [{"last_digits": "3456", "total_spent": 500.0, "cashback": 5.0}]},
+        ),
+        # Тест 5: Транзакции в периоде — учитываются
+        (
+            [
+                {"Дата операции": "10.12.2021 10:30:00", "Сумма платежа": 1000.0, "Номер карты": "1234567890125814"},
+                {"Дата операции": "25.11.2021 15:00:00", "Сумма платежа": 500.0, "Номер карты": "1234567890125814"},
+            ],
+            "2021-12-15 23:59:59",
+            {"cards": [{"last_digits": "5814", "total_spent": 1000.0, "cashback": 10.0}]},
+        ),
+        # Тест 6: Нет транзакций в периоде
+        (
+            [
+                {"Дата операции": "20.11.2021 10:00:00", "Сумма платежа": 300.0, "Номер карты": "1234567890123456"},
+                {"Дата операции": "05.01.2022 08:00:00", "Сумма платежа": 400.0, "Номер карты": "1234567890123456"},
+            ],
+            "2021-12-15 23:59:59",
+            {"cards": []},
+        ),
+        # Тест 7: Некорректная дата — пропускается
+        (
+            [
+                {"Дата операции": "invalid-date", "Сумма платежа": 100.0, "Номер карты": "1234567890123456"},
+                {"Дата операции": "15.12.2021 14:00:00", "Сумма платежа": 200.0, "Номер карты": "1234567890123456"},
+            ],
+            "2021-12-15 23:59:59",
+            {"cards": [{"last_digits": "3456", "total_spent": 200.0, "cashback": 2.0}]},
+        ),
+    ],
+)
+@patch("src.cards.pd.read_excel")
+def test_get_cards_summary(mock_read_excel, mock_transactions, input_data, cutoff_date, expected):
+    # Создаём DataFrame через фикстуру из conftest.py
+    mock_read_excel.return_value = mock_transactions(input_data)
+    result = get_cards_summary(cutoff_date)
 
-def test_calculate_cashback_correct_calculation(mock_excel_data):
-    """Тест проверки корректного расчета кэшбэка"""
-    processed_df = None
+    # Сортируем для стабильного сравнения
+    result["cards"].sort(key=lambda x: x["last_digits"])
+    expected["cards"].sort(key=lambda x: x["last_digits"])
 
-    def mock_to_excel(self, path, *args, **kwargs):
-        nonlocal processed_df
-        processed_df = self.copy()
-
-    with patch('pandas.read_excel', return_value=mock_excel_data.copy()), \
-         patch('pandas.DataFrame.to_excel', mock_to_excel):
-
-        calculate_cashback_100()
-
-        # Проверяем, что to_excel был вызван
-        assert processed_df is not None
-
-        # Проверяем расчет кэшбэка
-        assert (processed_df["Сумма платежа"] < 0).sum() == 2  # 2 отрицательных значения
-        assert (processed_df["Кэшбэк"] == [0, 2, 1, 0]).all()
-
-def test_calculate_cashback_missing_column():
-    """Тест проверки работы при отсутствии нужного столбца"""
-    mock_data = pd.DataFrame({"Дата": ["2023-01-01"]})
-
-    with patch('pandas.read_excel', return_value=mock_data):
-        with pytest.raises(KeyError) as excinfo:
-            calculate_cashback_100()
-        assert "В файле отсутствует колонка 'Сумма платежа'" in str(excinfo.value)
-
-def test_calculate_cashback_empty_data():
-    """Тест проверки работы с пустыми данными"""
-    mock_data = pd.DataFrame(columns=["Сумма платежа", "Дата"])
-    processed_df = None
-
-    def mock_to_excel(self, path, *args, **kwargs):
-        nonlocal processed_df
-        processed_df = self.copy()
-
-    with patch('pandas.read_excel', return_value=mock_data), \
-         patch('pandas.DataFrame.to_excel', mock_to_excel):
-
-        calculate_cashback_100()
-        assert processed_df is not None
-        assert len(processed_df) == 0
+    assert result == expected, f"Expected {expected}, got {result}"
 
 @pytest.fixture
 def mock_user_settings():
     return {"some_setting": "value"}
 
+
 @pytest.fixture
 def mock_api_response():
-    return {'close': 90.5, 'symbol': 'USD/RUB'}
+    return {"close": 90.5, "symbol": "USD/RUB"}
+
 
 def test_get_currency_rates_success(tmp_path, mock_user_settings, mock_api_response):
     # Создаем временные файлы
@@ -584,9 +736,9 @@ def test_get_currency_rates_success(tmp_path, mock_user_settings, mock_api_respo
     settings_file = data_dir / "user_settings.json"
     course_file = tmp_path / "courses.json"
 
-    with open(settings_file, 'w') as f:
+    with open(settings_file, "w") as f:
         json.dump(mock_user_settings, f)
-    with open(course_file, 'w') as f:
+    with open(course_file, "w") as f:
         json.dump({"user_currencies": ["USD"]}, f)  # Только USD в конфиге
 
     # Мокаем ответы API для обеих валют
@@ -596,36 +748,40 @@ def test_get_currency_rates_success(tmp_path, mock_user_settings, mock_api_respo
 
     eur_response = MagicMock()
     eur_response.status_code = 200
-    eur_response.json.return_value = {'close': 85.0, 'symbol': 'EUR/RUB'}
+    eur_response.json.return_value = {"close": 85.0, "symbol": "EUR/RUB"}
 
     # Настраиваем mock_get для разных запросов
     def get_side_effect(url, params=None):
-        if params and params['symbol'] == 'USD/RUB':
+        if params and params["symbol"] == "USD/RUB":
             return usd_response
-        elif params and params['symbol'] == 'EUR/RUB':
+        elif params and params["symbol"] == "EUR/RUB":
             return eur_response
         return MagicMock(status_code=404)
 
-    with patch('dotenv.load_dotenv'), \
-         patch('src.exchange_rate.ROOT_DIR', str(tmp_path)), \
-         patch('os.getenv', return_value='test_api_key'), \
-         patch('requests.get') as mock_get:
+    with (
+        patch("dotenv.load_dotenv"),
+        patch("src.exchange_rate.ROOT_DIR", str(tmp_path)),
+        patch("os.getenv", return_value="test_api_key"),
+        patch("requests.get") as mock_get,
+    ):
 
         mock_get.side_effect = get_side_effect
 
         from src.exchange_rate import get_currency_rates
+
         result = get_currency_rates()
 
         # Проверяем, что функция возвращает обе валюты (USD и EUR)
         assert len(result) == 2
-        assert {'currency': 'USD', 'rate': 90.5} in result
-        assert {'currency': 'EUR', 'rate': 85.0} in result
+        assert {"currency": "USD", "rate": 90.5} in result
+        assert {"currency": "EUR", "rate": 85.0} in result
 
         # Проверяем, что API вызывался для обеих валют
         assert mock_get.call_count == 2
-        calls = [call[1]['params']['symbol'] for call in mock_get.call_args_list]
-        assert 'USD/RUB' in calls
-        assert 'EUR/RUB' in calls
+        calls = [call[1]["params"]["symbol"] for call in mock_get.call_args_list]
+        assert "USD/RUB" in calls
+        assert "EUR/RUB" in calls
+
 
 def test_get_currency_rates_empty_currency_list(tmp_path, mock_user_settings):
     data_dir = tmp_path / "data"
@@ -634,204 +790,156 @@ def test_get_currency_rates_empty_currency_list(tmp_path, mock_user_settings):
     settings_file = data_dir / "user_settings.json"
     course_file = tmp_path / "courses.json"
 
-    with open(settings_file, 'w') as f:
+    with open(settings_file, "w") as f:
         json.dump(mock_user_settings, f)
-    with open(course_file, 'w') as f:
+    with open(course_file, "w") as f:
         json.dump({"user_currencies": []}, f)  # Пустой список валют
 
     # Мокаем ответы API для обеих валют
     usd_response = MagicMock()
     usd_response.status_code = 200
-    usd_response.json.return_value = {'close': 90.5, 'symbol': 'USD/RUB'}
+    usd_response.json.return_value = {"close": 90.5, "symbol": "USD/RUB"}
 
     eur_response = MagicMock()
     eur_response.status_code = 200
-    eur_response.json.return_value = {'close': 85.0, 'symbol': 'EUR/RUB'}
+    eur_response.json.return_value = {"close": 85.0, "symbol": "EUR/RUB"}
 
     def get_side_effect(url, params=None):
-        if params and params['symbol'] == 'USD/RUB':
+        if params and params["symbol"] == "USD/RUB":
             return usd_response
-        elif params and params['symbol'] == 'EUR/RUB':
+        elif params and params["symbol"] == "EUR/RUB":
             return eur_response
         return MagicMock(status_code=404)
 
-    with patch('dotenv.load_dotenv'), \
-         patch('src.exchange_rate.ROOT_DIR', str(tmp_path)), \
-         patch('os.getenv', return_value='test_api_key'), \
-         patch('requests.get') as mock_get:
+    with (
+        patch("dotenv.load_dotenv"),
+        patch("src.exchange_rate.ROOT_DIR", str(tmp_path)),
+        patch("os.getenv", return_value="test_api_key"),
+        patch("requests.get") as mock_get,
+    ):
 
         mock_get.side_effect = get_side_effect
 
         from src.exchange_rate import get_currency_rates
+
         result = get_currency_rates()
 
         # Проверяем, что функция всё равно возвращает обе валюты
         assert len(result) == 2
-        assert {'currency': 'USD', 'rate': 90.5} in result
-        assert {'currency': 'EUR', 'rate': 85.0} in result
+        assert {"currency": "USD", "rate": 90.5} in result
+        assert {"currency": "EUR", "rate": 85.0} in result
 
         # Проверяем, что API вызывался для обеих валют
         assert mock_get.call_count == 2
 
 @pytest.fixture
-def mock_excel_data():
-    """Фикстура возвращает тестовые данные в формате, аналогичном read_operation_excel"""
+def valid_card_numbers():
+    """Фикстура: корректные номера карт (только цифры)"""
     return [
-        {"Сумма платежа": 100.50, "Дата": "2023-01-01"},
-        {"Сумма платежа": 200.75, "Дата": "2023-01-02"},
-        {"Сумма платежа": -150.25, "Дата": "2023-01-03"},
-        {"Сумма платежа": 50.00, "Дата": "2023-01-04"},
+        "1234567812345678",
+        "1111222233334444",
+        "9999",
+        "5",
+        "",
     ]
 
-@pytest.fixture
-def mock_empty_data():
-    """Фикстура возвращает пустой список"""
-    return []
 
 @pytest.fixture
-def mock_invalid_data():
-    """Фикстура возвращает данные с некорректными значениями"""
+def invalid_card_strings():
+    """Фикстура: некорректные строки с буквами/символами — но с цифрами"""
     return [
-        {"Сумма платежа": 0, "Дата": "2023-01-02"},  # Заменили None на 0
-        {"Сумма платежа": 100.50, "Дата": "2023-01-01"},
-        {"Сумма платежа": 0, "Дата": "2023-01-03"},  # Добавили поле "Сумма платежа" со значением 0
+        "1234a5678b9012",  # буквы + цифры
+        "1234-5678-9012-3456",  # дефисы
+        "1234 5678 9012 3456",  # пробелы
+        "!@#$1234%^&*5678",  # спецсимволы
     ]
 
-@pytest.mark.parametrize("column_name, expected_total", [
-    ("Сумма платежа", 201.0),  # 100.5 + 200.75 - 150.25 + 50 = 201.0
-    ("Другая колонка", 0.0),    # Если колонки нет, вернется 0
-])
-def test_calculate_total_expenses_normal(mock_excel_data, column_name, expected_total):
-    """Тест проверки расчета общей суммы расходов с нормальными данными"""
-    with patch('src.expenses.read_operation_excel', return_value=mock_excel_data):
-        result = calculate_total_expenses(column_name)
-        assert abs(result - expected_total) < 0.01
-
-def test_calculate_total_expenses_empty(mock_empty_data):
-    """Тест проверки работы с пустыми данными"""
-    with patch('src.expenses.read_operation_excel', return_value=mock_empty_data):
-        result = calculate_total_expenses("Сумма платежа")
-        assert result == 0.0
-
-def test_calculate_total_expenses_invalid(mock_invalid_data):
-    """Тест проверки обработки некорректных данных"""
-    with patch('src.expenses.read_operation_excel', return_value=mock_invalid_data):
-        result = calculate_total_expenses("Сумма платежа")
-        # Теперь ожидаем 0 + 100.50 + 0 = 100.50
-        assert result == 100.50
-
-def test_calculate_total_expenses_negative_values(mock_excel_data):
-    """Тест проверки работы с отрицательными значениями"""
-    with patch('src.expenses.read_operation_excel', return_value=mock_excel_data):
-        result = calculate_total_expenses("Сумма платежа")
-        # Функция возвращает 100.5 + 200.75 - 150.25 + 50 = 201.0
-        assert result == 201.0
-
-def test_calculate_total_expenses_different_column(mock_excel_data):
-    """Тест проверки работы с разными названиями колонок"""
-    modified_data = [{**item, "Новая колонка": item["Сумма платежа"]} for item in mock_excel_data]
-    with patch('src.expenses.read_operation_excel', return_value=modified_data):
-        result = calculate_total_expenses("Новая колонка")
-        assert abs(result - 201.0) < 0.01  # 100.5 + 200.75 - 150.25 + 50 = 201.0
 
 @pytest.fixture
-def setup_logs(tmp_path):
-    """Фикстура для настройки тестовой среды с логированием"""
-    # Сохраняем оригинальные пути
-    original_log_dir = log_dir
-    original_handlers = logger.handlers.copy()
+def invalid_types():
+    """Фикстура: неверные типы данных"""
+    return [
+        None,
+        12345678,
+        [],
+        {},
+        3.14,
+    ]
 
-    # Настраиваем тестовую директорию
-    test_log_dir = tmp_path / "logs"
-    os.makedirs(test_log_dir, exist_ok=True)
-
-    # Перенастраиваем логгер
-    test_log_file = test_log_dir / "mask.log"
-    new_handler = logging.FileHandler(test_log_file)
-    new_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
-    logger.handlers.clear()
-    logger.addHandler(new_handler)
-
-    yield test_log_dir  # Передаем тестовую директорию в тест
-
-    # Восстанавливаем оригинальные настройки
-    logger.handlers.clear()
-    logger.handlers.extend(original_handlers)
 
 @pytest.fixture
 def mock_logger():
-    """Фикстура для мока логгера"""
-    with patch('src.mask.logger') as mock:
+    """Фикстура: мок для логгера"""
+    with patch("src.mask.logger") as mock:
         yield mock
 
-# Параметризованные тесты
-@pytest.mark.parametrize("input_number,expected_output", [
-    ("1234567812345678", " ****  **** **** 5678"),  # Корректный номер
-    ("1234", " ****  **** **** 1234"),              # Короткий номер
-    ("1", " ****  **** **** 1"),                    # Очень короткий номер
-    ("", " **** "),                                # Пустая строка
-])
-def test_mask_card_number_valid(input_number, expected_output, mock_logger):
-    """Тест проверки маскирования корректных номеров карт"""
-    result = get_mask_card_number(input_number)
 
-    if input_number:  # Если номер не пустой
-        mock_logger.info.assert_called_once_with('Маскировка номера банковской карты')
-    else:
-        mock_logger.info.assert_not_called()
+@pytest.mark.parametrize(
+    "card_number, expected",
+    [
+        ("1234567812345678", "5678"),
+        ("1111222233334444", "4444"),
+        ("9999", "9999"),
+        ("5", "5"),
+        ("", ""),
+    ],
+)
+def test_get_mask_card_number_valid(card_number, expected):
+    """Тест: корректные номера карт — возвращают последние 4 цифры"""
+    result = get_mask_card_number(card_number)
+    assert result == expected
 
-    assert result == expected_output
 
-@pytest.mark.parametrize("invalid_input", [
-    "1234a567812345678",  # С буквой
-    "1234-5678-1234-5678", # С дефисами
-    "1234 5678 1234 5678", # С пробелами
-    "!@#$%^&*()",          # Спецсимволы
-])
-def test_mask_card_number_invalid(invalid_input, mock_logger):
-    """Тест проверки обработки некорректных номеров карт"""
+@pytest.mark.parametrize(
+    "card_number, expected",
+    [
+        ("1234a5678b9012", "9012"),
+        ("1234-5678-9012-3456", "3456"),
+        ("1234 5678 9012 3456", "3456"),
+        ("!@#$1234%^&*5678", "5678"),
+    ],
+)
+def test_get_mask_card_number_invalid_string_with_digits(card_number, expected, invalid_card_strings):
+    """Тест: строки с символами — извлекаются цифры, возвращаются последние 4"""
+    result = get_mask_card_number(card_number)
+    assert result == expected
+
+
+@pytest.mark.parametrize("invalid_input", [None, 12345678, [], {}, 3.14])
+def test_get_mask_card_number_invalid_type(invalid_input, invalid_types):
+    """Тест: неверные типы данных — возвращают пустую строку"""
     result = get_mask_card_number(invalid_input)
-
-    mock_logger.error.assert_called_once_with('Введены недопустимые символы в номере карты')
     assert result == ""
 
-def test_mask_card_number_none(mock_logger):
-    """Тест проверки обработки None"""
-    result = get_mask_card_number(None)
 
-    mock_logger.error.assert_called_once_with('Введены недопустимые символы в номере карты')
-    assert result == ""
+def test_get_mask_card_number_logs_success(mock_logger):
+    """Тест: успешная обработка логируется как INFO с правильным форматом"""
+    card_number = "1234567812345678"
+    get_mask_card_number(card_number)
+    mock_logger.info.assert_called_once_with(f"Извлечены последние цифры: '{card_number}' → '5678'")
 
-def test_log_directory_creation(setup_logs):
-    """Тест проверки создания директории логов"""
-    assert os.path.exists(log_dir)
-    assert os.path.isdir(log_dir)
 
-def test_logging_output(setup_logs, tmp_path):
-    """Тест проверки записи в лог-файл"""
-    test_number = "1234567812345678"
-    get_mask_card_number(test_number)
+def test_get_mask_card_number_logs_invalid_type(mock_logger):
+    """Тест: неверный тип логируется как ERROR"""
+    get_mask_card_number(None)
+    mock_logger.error.assert_called_once_with(
+        "Неверный тип номера карты: <class 'NoneType'> — ожидается str, получено: None"
+    )
 
-    log_file = tmp_path / "logs" / "mask.log"
-    assert os.path.exists(log_file)
 
-    with open(log_file, 'r') as f:
-        log_content = f.read()
-        assert "Маскировка номера банковской карты" in log_content
+def test_get_mask_card_number_empty_string_no_log(mock_logger):
+    """Тест: пустая строка не вызывает логирование (т.к. нет цифр)"""
+    get_mask_card_number("")
+    mock_logger.info.assert_not_called()
+    mock_logger.error.assert_not_called()
 
-def test_logger_configuration():
-    """Тест проверки конфигурации логгера"""
-    assert logger.name == 'mask'
-    assert logger.level == logging.DEBUG
-    assert len(logger.handlers) > 0
-    assert isinstance(logger.handlers[0], logging.FileHandler)
-
+# Фикстура для генерации тестовых данных
 @pytest.fixture
 def sample_excel_data():
     return [
         {"Дата операции": "01.01.2024", "Сумма платежа": -100.0, "Категория": "Продукты"},
         {"Дата операции": "02.01.2024", "Сумма платежа": -50.0, "Категория": "Транспорт"},
-        {"Дата операции": "03.01.2024", "Сумма платежа": 200.0, "Категория": "Зарплата"}
+        {"Дата операции": "03.01.2024", "Сумма платежа": 200.0, "Категория": "Зарплата"},
     ]
 
 
@@ -918,18 +1026,19 @@ def test_spending_by_category_returns_correct_count():
     start_date = end_date - timedelta(days=90)
 
     # Генерируем даты в диапазоне в правильном формате
-    dates = pd.date_range(start_date, end_date, freq='10D').strftime('%d.%m.%Y %H:%M:%S')
+    dates = pd.date_range(start_date, end_date, freq="10D").strftime("%d.%m.%Y %H:%M:%S")
 
     test_data = {
         "Дата операции": dates,
         "Категория": ["Супермаркеты"] * len(dates),
-        "Сумма платежа": [-1000] * len(dates)
+        "Сумма платежа": [-1000] * len(dates),
     }
     df = pd.DataFrame(test_data)
 
     result = spending_by_category(df, "Супермаркеты", "31.12.2021")
     assert len(result) > 0, f"Ожидалось не менее 1 строки, получено {len(result)}"
     assert all(result["Категория"] == "Супермаркеты")
+
 
 def test_spending_by_category_filters_by_category():
     """Тестирует, что функция фильтрует по правильной категории."""
@@ -938,12 +1047,12 @@ def test_spending_by_category_filters_by_category():
     start_date = end_date - timedelta(days=90)
 
     # Генерируем даты в диапазоне в правильном формате
-    dates = pd.date_range(start_date, end_date, freq='10D').strftime('%d.%m.%Y %H:%M:%S')
+    dates = pd.date_range(start_date, end_date, freq="10D").strftime("%d.%m.%Y %H:%M:%S")
 
     test_data = {
         "Дата операции": dates,
         "Категория": ["Супермаркеты"] * len(dates),
-        "Сумма платежа": [-1000] * len(dates)
+        "Сумма платежа": [-1000] * len(dates),
     }
     df = pd.DataFrame(test_data)
 
@@ -962,30 +1071,7 @@ def test_spending_by_category_filters_by_category():
     # Альтернативный вариант: проверяем, что количество не превышает ожидаемого
     assert len(result) <= len(dates) - 2, f"Количество строк не должно превышать {len(dates)-2}"
 
-
-def test_report_file_created():
-    """Тестирует, что декоратор создаёт файл отчёта."""
-    # Генерируем отчёт
-    result = spending_by_category("Супермаркеты", "31.12.2021")
-    report_path = os.path.join("reports", "spending_by_category.txt")
-
-    # Отладочный вывод для проверки
-    print(f"Путь к файлу отчета: {report_path}")
-    print(f"Результат: {result}")
-
-    # Проверяем, что файл отчёта был создан
-    assert os.path.exists(report_path), "Файл отчёта не был создан"
-
-    with open(report_path, 'r', encoding='utf-8') as f:
-        content = f.read()
-
-    assert len(content.strip()) > 0, "Файл отчёта пуст"
-    assert "Супермаркеты" in content, "Файл отчёта не содержит категории 'Супермаркеты'"
-
-    # Проверка на наличие даты в формате YYYY-MM-DD
-    date_pattern = r"\d{4}-\d{2}-\d{2}"
-    assert re.search(date_pattern, content), "Файл отчёта не содержит ни одной даты в формате YYYY-MM-DD"
-
+# Фикстура для создания тестовых транзакций
 @pytest.fixture
 def mock_transactions():
     return [
@@ -993,43 +1079,39 @@ def mock_transactions():
             "Описание": "Покупка продуктов в Пятерочке",
             "Категория": "Супермаркет",
             "Сумма": 1500.00,
-            "Дата": "2023-05-15"
+            "Дата": "2023-05-15",
         },
-        {
-            "Описание": "Поездка на каршеринге",
-            "Категория": "Транспорт",
-            "Сумма": 850.50,
-            "Дата": "2023-05-16"
-        },
-        {
-            "Описание": "Оплата интернета",
-            "Категория": "Коммунальные услуги",
-            "Сумма": 1200.00,
-            "Дата": "2023-05-17"
-        }
+        {"Описание": "Поездка на каршеринге", "Категория": "Транспорт", "Сумма": 850.50, "Дата": "2023-05-16"},
+        {"Описание": "Оплата интернета", "Категория": "Коммунальные услуги", "Сумма": 1200.00, "Дата": "2023-05-17"},
     ]
+
 
 # Фикстура для mock-ирования read_operation_excel
 @pytest.fixture
 def mock_read_excel(mock_transactions):
-    with patch('src.services.read_operation_excel', return_value=mock_transactions) as mock:
+    with patch("src.services.read_operation_excel", return_value=mock_transactions) as mock:
         yield mock
+
 
 # Фикстура для mock-ирования logger
 @pytest.fixture
 def mock_logger():
-    with patch('src.services.logger') as mock:
+    with patch("src.services.logger") as mock:
         yield mock
 
+
 # Параметризованный тест для успешного поиска
-@pytest.mark.parametrize("query,expected_count", [
-    ("Супермаркет", 1),  # Поиск по категории
-    ("Пятерочке", 1),    # Поиск по описанию
-    ("каршеринг", 1),    # Поиск по части слова
-    ("Транспорт", 1),    # Поиск по категории
-    ("Несуществующий", 0),  # Пустой результат
-    ("", 3)              # Пустой запрос - все транзакции
-])
+@pytest.mark.parametrize(
+    "query,expected_count",
+    [
+        ("Супермаркет", 1),  # Поиск по категории
+        ("Пятерочке", 1),  # Поиск по описанию
+        ("каршеринг", 1),  # Поиск по части слова
+        ("Транспорт", 1),  # Поиск по категории
+        ("Несуществующий", 0),  # Пустой результат
+        ("", 3),  # Пустой запрос - все транзакции
+    ],
+)
 def test_simple_search_success(mock_read_excel, mock_logger, query, expected_count):
     """Тест успешного выполнения поиска"""
     # Проверяем, что mock возвращает правильные данные
@@ -1044,35 +1126,34 @@ def test_simple_search_success(mock_read_excel, mock_logger, query, expected_cou
 
     # Проверяем логирование
     if expected_count == 0:
-        mock_logger.info.assert_called_with(
-            f"Найдено {expected_count} транзакций по запросу '{query}'"
-        )
+        mock_logger.info.assert_called_with(f"Найдено {expected_count} транзакций по запросу '{query}'")
     else:
-        mock_logger.info.assert_called_with(
-            f"Найдено {expected_count} транзакций по запросу '{query}'"
-        )
+        mock_logger.info.assert_called_with(f"Найдено {expected_count} транзакций по запросу '{query}'")
+
 
 # Тест обработки пустого файла
 def test_simple_search_empty_file(mock_read_excel, mock_logger):
     """Тест обработки пустого файла с транзакциями"""
     # Переопределяем mock для возврата пустого списка
-    with patch('src.services.read_operation_excel', return_value=[]):
+    with patch("src.services.read_operation_excel", return_value=[]):
         result = simple_search("Супермаркет")
         data = json.loads(result)
 
         assert data["transactions"] == []
         mock_logger.warning.assert_called_with("Файл с транзакциями пуст или не найден")
 
+
 # Тест обработки ошибок
 def test_simple_search_exception(mock_read_excel, mock_logger):
     """Тест обработки исключений"""
     # Переопределяем mock для генерации исключения
-    with patch('src.services.read_operation_excel', side_effect=Exception("Test error")):
+    with patch("src.services.read_operation_excel", side_effect=Exception("Test error")):
         result = simple_search("Супермаркет")
         data = json.loads(result)
 
         assert data["error"] == "Внутренняя ошибка сервера"
         mock_logger.error.assert_called_with("Ошибка при выполнении поиска: Test error")
+
 
 # Тест формата вывода
 def test_simple_search_output_format(mock_read_excel):
@@ -1093,6 +1174,7 @@ def test_simple_search_output_format(mock_read_excel):
         assert "Сумма" in tx
         assert "Дата" in tx
 
+
 # Тест регистронезависимого поиска
 def test_simple_search_case_insensitive(mock_read_excel):
     """Тест регистронезависимого поиска"""
@@ -1102,6 +1184,7 @@ def test_simple_search_case_insensitive(mock_read_excel):
         data = json.loads(result)
         assert len(data["transactions"]) == 1
 
+
 # Тест поиска по части слова
 def test_simple_search_partial_match(mock_read_excel):
     """Тест поиска по части слова"""
@@ -1110,36 +1193,41 @@ def test_simple_search_partial_match(mock_read_excel):
     assert len(data["transactions"]) == 1
     assert "продуктов" in data["transactions"][0]["Описание"].lower()
 
+# Фикстура для виртуальных данных (соответствует реальному коду)
+@pytest.fixture
+def mock_virtual_data():
+    return [{"stock": "AAPL", "price": "150.12"}, {"stock": "AMZN", "price": "3173.18"}]
+
+
+# Фикстура для API-ответа (одинаковый для всех запросов в моке)
 @pytest.fixture
 def mock_api_response():
-    return {
-        "data": [
-            {"symbol": "SPY", "name": "SPDR S&P 500 ETF Trust"},
-            {"symbol": "QQQ", "name": "Invesco QQQ Trust"}
-        ],
-        "status": "ok"
-    }
+    return {"price": "400.00"}  # Как возвращает Twelve Data
 
-@pytest.fixture
-def mock_env_vars(monkeypatch):
-    monkeypatch.setenv("API_KEY_twelvedata", "test_api_key_123")
 
+# Фикстура для невалидного API-ответа
 @pytest.fixture
 def mock_invalid_api_response():
     return {"error": "Invalid API key"}
 
-@pytest.fixture
-def temp_json_file(tmp_path):
-    return tmp_path / "test_stock_prices.json"
 
-@pytest.mark.parametrize("virtual,expected_count", [
-    (True, 1),  # Виртуальный режим должен возвращать 1 элемент
-    (False, 2)  # Реальный режим должен возвращать 2 элемента (из mock)
-])
+# Фикстура для переменных окружения
+@pytest.fixture
+def mock_env_vars(monkeypatch):
+    monkeypatch.setenv("API_KEY_twelvedata", "test_api_key_123")
+
+
+@pytest.mark.parametrize(
+    "virtual,expected_count",
+    [
+        (True, 2),  # Виртуальный режим: 2 акции из фикстуры
+        (False, 2),  # Реальный режим: 2 акции, мокаем API
+    ],
+)
 def test_get_stock_prices(virtual, expected_count, mock_api_response, mock_env_vars):
-    with patch('requests.get') as mock_get:
-        # Настройка mock для реального режима
+    with patch("requests.get") as mock_get:
         if not virtual:
+            # Мокаем ответ для каждого запроса (AAPL и AMZN)
             mock_response = MagicMock()
             mock_response.status_code = 200
             mock_response.json.return_value = mock_api_response
@@ -1147,67 +1235,196 @@ def test_get_stock_prices(virtual, expected_count, mock_api_response, mock_env_v
 
         result = get_stock_prices(virtual=virtual)
 
+        # Проверяем структуру и количество
+        assert len(result) == expected_count
+        assert all(isinstance(item, dict) and "stock" in item and "price" in item for item in result)
+
         if virtual:
-            assert len(result) == expected_count
-            assert result[0]["symbol"] == "SPY"
-            assert result[0]["price"] == "400.00"
+            # Проверяем виртуальные данные
+            assert result[0]["stock"] == "AAPL"
+            assert result[0]["price"] == "150.12"
+            assert result[1]["stock"] == "AMZN"
+            assert result[1]["price"] == "3173.18"
         else:
-            assert len(result["data"]) == expected_count
-            assert result["status"] == "ok"
-            mock_get.assert_called_once()
+            # Проверяем, что обе акции получили одинаковый мок-ответ
+            assert result[0]["stock"] == "AAPL"
+            assert result[0]["price"] == "400.00"
+            assert result[1]["stock"] == "AMZN"
+            assert result[1]["price"] == "400.00"
+            assert mock_get.call_count == 2  # Два вызова: AAPL и AMZN
+
 
 def test_get_stock_prices_api_error(mock_env_vars):
-    with patch('requests.get') as mock_get:
+    with patch("requests.get") as mock_get:
         mock_response = MagicMock()
         mock_response.status_code = 401
         mock_response.text = "Unauthorized"
         mock_get.return_value = mock_response
 
         result = get_stock_prices(virtual=False)
-        assert result == []
+
+        assert len(result) == 2
+        assert result[0]["price"] == "0.00"
+        assert result[1]["price"] == "0.00"
+
 
 def test_get_stock_prices_missing_api_key():
     with patch.dict(os.environ, {"API_KEY_twelvedata": ""}):
         result = get_stock_prices(virtual=False)
-        assert result == []
+
+        assert len(result) == 2
+        assert result[0]["price"] == "0.00"
+        assert result[1]["price"] == "0.00"
+
 
 def test_get_stock_prices_json_decode_error(mock_env_vars):
-    with patch('requests.get') as mock_get:
+    with patch("requests.get") as mock_get:
         mock_response = MagicMock()
         mock_response.status_code = 200
-        mock_response.json.side_effect = json.JSONDecodeError("Expecting value", "", 0)
+        mock_response.json.side_effect = ValueError("Invalid JSON")  # Или json.JSONDecodeError
         mock_get.return_value = mock_response
 
         result = get_stock_prices(virtual=False)
-        assert result == []
 
-@pytest.mark.parametrize("test_data,expected_filename", [
-    ([{"symbol": "AAPL", "price": "150.00"}], "test_output.json"),
-    ([], "empty_output.json")
-])
-def test_save_to_json(test_data, expected_filename, tmp_path):
-    filepath = tmp_path / expected_filename
+        assert len(result) == 2
+        assert result[0]["price"] == "0.00"
+        assert result[1]["price"] == "0.00"
 
-    save_to_json(test_data, str(filepath))
 
-    # Проверяем, что файл создан и содержит правильные данные
-    assert filepath.exists()
-    with open(filepath, 'r') as f:
-        loaded_data = json.load(f)
-    assert loaded_data == test_data
+def test_get_stock_prices_invalid_api_structure(mock_env_vars):
+    with patch("requests.get") as mock_get:
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"error": "no price"}  # Нет ключа "price"
+        mock_get.return_value = mock_response
+
+        result = get_stock_prices(virtual=False)
+
+        assert len(result) == 2
+        assert result[0]["price"] == "0.00"
+        assert result[1]["price"] == "0.00"
+
 
 def test_integration_virtual_mode():
     result = get_stock_prices(virtual=True)
-    assert len(result) == 1
-    assert result[0]["symbol"] == "SPY"
+    assert len(result) == 2
+    assert result[0]["stock"] == "AAPL"
+    assert result[0]["price"] == "150.12"
+    assert result[1]["stock"] == "AMZN"
+    assert result[1]["price"] == "3173.18"
 
-def test_integration_real_mode(mock_api_response, mock_env_vars, tmp_path):
-    with patch('requests.get') as mock_get:
+
+def test_integration_real_mode(mock_api_response, mock_env_vars):
+    with patch("requests.get") as mock_get:
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = mock_api_response
         mock_get.return_value = mock_response
 
         result = get_stock_prices(virtual=False)
-        assert len(result["data"]) == 2
-        assert result["status"] == "ok"
+
+        assert len(result) == 2
+        assert result[0]["stock"] == "AAPL"
+        assert result[0]["price"] == "400.00"
+        assert result[1]["stock"] == "AMZN"
+        assert result[1]["price"] == "400.00"
+        assert mock_get.call_count == 2  # Два запроса
+
+def test_transactions_operations_valid_data(valid_transactions_data):
+    """Тест: корректные данные → возвращает топ-5 положительных транзакций, отсортированных по убыванию."""
+    with patch("src.transactions.read_operation_excel", return_value=valid_transactions_data):
+        result = transactions_operations()
+
+        assert "top_transactions" in result
+        assert len(result["top_transactions"]) == 5
+
+        # Проверяем суммы в порядке убывания
+        amounts = [t["amount"] for t in result["top_transactions"]]
+        assert amounts == [5000.0, 3000.5, 1500.0, 1198.23, 899.99]
+
+        # Проверяем поля по позициям
+        assert result["top_transactions"][0]["date"] == "21.12.2021"
+        assert result["top_transactions"][1]["category"] == "Транспорт"
+        assert result["top_transactions"][3]["description"] == "Доставка еды"
+        assert result["top_transactions"][4]["description"] == "Такси"
+
+
+def test_transactions_operations_missing_columns(missing_columns_data):
+    """
+    Тест: в данных отсутствует обязательный столбец 'Сумма платежа' у некоторых транзакций.
+    Функция должна:
+    - пропускать транзакции без 'Сумма платежа'
+    - сортировать оставшиеся по убыванию суммы
+    - возвращать не более 5 самых крупных
+    """
+    with patch("src.transactions.read_operation_excel", return_value=missing_columns_data):
+        result = transactions_operations()
+
+        # Проверяем, что структура ответа корректна
+        assert "top_transactions" in result
+        assert isinstance(result["top_transactions"], list)
+
+        # В данных только 1 транзакция с 'Сумма платежа' ожидаем 1
+        assert len(result["top_transactions"]) == 1
+
+        # Проверяем содержимое единственной валидной транзакции
+        tx = result["top_transactions"][0]
+        assert tx["date"] == "21.12.2021"
+        assert tx["amount"] == 5000.0
+        assert tx["category"] == "Рестораны"
+        assert tx["description"] == ""  # поле отсутствовало подставлено как пустая строка
+
+
+@pytest.mark.parametrize(
+    "transaction, expected_count",
+    [
+        (
+            {
+                "Дата операции": "21.12.2021 14:30:00",
+                "Сумма платежа": "5000.0",
+                "Категория": "Рестораны",
+                "Описание": "Ужин",
+            },
+            1,
+        ),
+        (
+            {
+                "Дата операции": "21.12.2021 14:30:00",
+                "Сумма платежа": "-2000.0",
+                "Категория": "Перевод",
+                "Описание": "Другу",
+            },
+            0,
+        ),
+        ({"Дата операции": "invalid-date", "Сумма платежа": "1000.0", "Категория": "Еда", "Описание": "Пицца"}, 0),
+        ({"Дата операции": "21.12.2021 14:30:00", "Сумма платежа": "abc", "Категория": "Еда", "Описание": "Пицца"}, 0),
+    ],
+)
+def test_transactions_operations_single_transaction(transaction, expected_count):
+    """Параметризованный тест: фильтрация транзакций по валидности"""
+    with patch("src.transactions.read_operation_excel", return_value=[transaction]):
+        result = transactions_operations()
+        assert len(result["top_transactions"]) == expected_count
+
+
+def test_transactions_operations_empty_data(empty_transactions_data):
+    """Тест: пустой список → возвращает пустой top_transactions"""
+    with patch("src.transactions.read_operation_excel", return_value=empty_transactions_data):
+        result = transactions_operations()
+        assert result["top_transactions"] == []
+
+
+def test_transactions_operations_invalid_data(invalid_data_data):
+    """Тест: отрицательные суммы и неверная дата → фильтруются"""
+    with patch("src.transactions.read_operation_excel", return_value=invalid_data_data):
+        result = transactions_operations()
+        assert len(result["top_transactions"]) == 0
+
+
+def test_transactions_operations_mixed_data(mixed_data):
+    """Тест: смешанные данные — возвращаются только валидные положительные"""
+    with patch("src.transactions.read_operation_excel", return_value=mixed_data):
+        result = transactions_operations()
+        assert len(result["top_transactions"]) == 2
+        assert result["top_transactions"][0]["amount"] == 5000.0
+        assert result["top_transactions"][1]["amount"] == 3000.0

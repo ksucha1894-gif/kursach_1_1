@@ -1,7 +1,7 @@
 import os
 from datetime import datetime, timedelta
 from functools import wraps
-from typing import Optional
+from typing import List, Dict, Any, Optional
 
 import pandas as pd
 
@@ -113,24 +113,24 @@ def spending_by_category(transactions: pd.DataFrame, category: str, date: Option
 
 
 # Пример использования
-if __name__ == "__main__":
-    # Загружаем транзакции
-    transactions_data = read_operation_excel()
-    transactions_df = pd.DataFrame(transactions_data)
-
-    try:
-        # Пример 1: Отчет по категории "Супермаркет" за последние 3 месяца
-        products_report = spending_by_category(transactions_df, "Супермаркет")
-        print("Отчет по супермаркетам успешно создан")
-
-        # Пример 2: Отчет по категории "Каршеринг" на конкретную дату
-        transport_report = spending_by_category(transactions_df, "Каршеринг", "26.12.2021")
-        print("Отчет по каршерингу успешно создан")
-
-        # Пример 3: Отчет с несуществующей категорией
-        empty_report = spending_by_category(transactions_df, "Несуществующая категория")
-        print("Отчет по несуществующей категории создан")
-
-    except Exception as e:
-        logger.error(f"Ошибка при создании отчета: {str(e)}")
-        print(f"Произошла ошибка: {str(e)}")
+# if __name__ == "__main__":
+#     # Загружаем транзакции
+#     transactions_data = read_operation_excel()
+#     transactions_df = pd.DataFrame(transactions_data)
+#
+#     try:
+#         # Пример 1: Отчет по категории "Супермаркет" за последние 3 месяца
+#         products_report = spending_by_category(transactions_df, "Супермаркет")
+#         print("Отчет по супермаркетам успешно создан")
+#
+#         # Пример 2: Отчет по категории "Каршеринг" на конкретную дату
+#         transport_report = spending_by_category(transactions_df, "Каршеринг", "26.12.2021")
+#         print("Отчет по каршерингу успешно создан")
+#
+#         # Пример 3: Отчет с несуществующей категорией
+#         empty_report = spending_by_category(transactions_df, "Несуществующая категория")
+#         print("Отчет по несуществующей категории создан")
+#
+#     except Exception as e:
+#         logger.error(f"Ошибка при создании отчета: {str(e)}")
+#         print(f"Произошла ошибка: {str(e)}")

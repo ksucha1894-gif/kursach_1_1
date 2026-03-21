@@ -40,20 +40,20 @@ def simple_search(query: str) -> str:
 
 
 # Пример использования функции simple_search
-if __name__ == "__main__":
-    # Пример 1: Поиск по категории
-    print("Пример 1: Поиск транзакций по категории 'Супермаркет'")
-    result_products = simple_search("Супермаркет")
-    print(result_products)
-    print("\n" + "-" * 50 + "\n")
-
-    # Пример 2: Поиск по описанию
-    print("Пример 2: Поиск транзакций с описанием 'Каршеринг'")
-    result_purchase = simple_search("Каршеринг")
-    print(result_purchase)
-    print("\n" + "-" * 50 + "\n")
-
-    # Пример 3: Поиск по несуществующему запросу
-    print("Пример 3: Поиск транзакций по несуществующему запросу 'Несуществующая категория'")
-    result_empty = simple_search("Несуществующая категория")
-    print(result_empty)
+# if __name__ == "__main__":
+#     # Пример 1: Поиск по категории
+#     print("Пример 1: Поиск транзакций по категории 'Супермаркет'")
+#     result_products = simple_search("Супермаркет")
+#     print(result_products)
+#     print("\n" + "-" * 50 + "\n")
+#
+#     # Пример 2: Поиск по описанию
+#     print("Пример 2: Поиск транзакций с описанием 'Каршеринг'")
+#     result_purchase = simple_search("Каршеринг")
+#     print(result_purchase)
+#     print("\n" + "-" * 50 + "\n")
+#
+#     # Пример 3: Поиск по несуществующему запросу
+#     print("Пример 3: Поиск транзакций по несуществующему запросу 'Несуществующая категория'")
+#     result_empty = simple_search("Несуществующая категория")
+#     print(result_empty)

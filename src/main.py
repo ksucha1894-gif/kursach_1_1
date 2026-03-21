@@ -1,5 +1,6 @@
 import json
 from datetime import datetime
+from pprint import pprint
 
 import pandas as pd
 
@@ -10,7 +11,7 @@ from src.services import simple_search
 from src.views import get_financial_report
 
 
-def main():
+def main(datetime_str: str) -> str:
     """Основная функция программы"""
     logger.info("Финансовая аналитика запущена")
     print("Финансовая аналитика запущена")
@@ -18,10 +19,11 @@ def main():
     try:
         # 1. Получение финансового отчета
         print("\n1. Формирование финансового отчета...")
-        datetime_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        # datetime_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         financial_report = get_financial_report(datetime_str)
         report_data = json.loads(financial_report)
-        print(f"Отчет сформирован: {report_data['greeting']}")
+        print("Отчет сформирован")
+        pprint(report_data)
 
         # 2. Простой поиск транзакций
         print("\n2. Выполнение простого поиска...")
@@ -51,4 +53,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    main("2021-12-31 23:59:59")

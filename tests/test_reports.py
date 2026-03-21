@@ -4,8 +4,9 @@ from datetime import datetime, timedelta
 
 import pandas as pd
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../src")))
 from src.reports import spending_by_category
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../src")))
 
 
 def test_spending_by_category_returns_correct_count():
